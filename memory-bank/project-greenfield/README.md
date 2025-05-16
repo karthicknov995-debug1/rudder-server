@@ -48,32 +48,198 @@
     report the metrics
     * It uses a Postgres database to store the metrics in the outbox table
     * It uses an HTTP client to send the metrics stored in the outbox table to an endpoint like https://reporting.rudderstack.com/
-  * TODO - is it used to report successful events only? or do we report failed events as well?
-* destDebugger - TODO
-* transDebugger - TODO
-* backendConfig - TODO
-* proc.gatewayDB = gatewayDB
-* routerDB - TODO
-* batchRouterDB - TODO
-* readErrorDB - TODO
-* writeErrorDB - TODO
-* eventSchemaDB - TODO
-* archivalDB - TODO
-* pendingEventsRegistry - TODO
-* transientSources - TODO
-* fileuploader - TODO
-* rsourcesService - TODO
-* enrichers - TODO
-* transformerFeaturesService - TODO
-* adaptiveLimit - TODO
-* storePlocker - TODO
-* trackedUsersReporter - TODO
-* sourceObservers - TODO
+    * It reports both successful and failed events, including status codes and error information
+    * This ensures comprehensive monitoring and diagnostics of the event processing pipeline
+* destDebugger
+  * Used to debug destination events
+  * Uploads events to the control plane for debugging purposes
+  * Similar to the source debugger in the Gateway, there's no guarantee that events will be uploaded successfully
+  * Only successful events are recorded and shown in the debugger UI
+* transDebugger
+  * Used to debug transformation events
+  * Uploads events to the control plane for debugging purposes
+  * Similar to the source debugger, there's no guarantee that events will be uploaded successfully
+* backendConfig
+  * Used to fetch control plane configurations
+  * Provides information about sources, destinations, and their configurations
+  * The Processor uses this to determine how to process events for different destinations
+  * It has a cache to reduce the number of API calls to the control plane
+* gatewayDB
+  * Used to read jobs that were stored by the Gateway
+  * The Processor picks up jobs from this database and processes them
+  * Uses a transaction to mark jobs as executing to ensure they're not picked up by other Processor instances
+* routerDB
+  * Used to store processed jobs that need to be sent to destinations via the Router
+  * The Processor writes to this database after processing events
+  * Uses a transaction to ensure atomicity when writing jobs
+* batchRouterDB
+  * Used to store processed jobs that need to be sent to batch destinations via the BatchRouter
+  * The Processor writes to this database after processing events
+  * Uses a transaction to ensure atomicity when writing jobs
+* readErrorDB
+  * Used to store jobs that failed during reading from the Gateway DB
+  * Allows for retry of failed jobs
+* writeErrorDB
+  * Used to store jobs that failed during writing to the Router or BatchRouter DBs
+  * Allows for retry of failed jobs
+* eventSchemaDB
+  * Used to store event schemas for validation and tracking
+  * Part of the schema management system
+* archivalDB
+  * Used to archive processed events for long-term storage
+  * Only used if archival is enabled in the configuration
+* pendingEventsRegistry
+  * Used to track pending events in the system
+  * Helps with monitoring and diagnostics
+* transientSources
+  * Used to handle transient sources that don't persist data
+  * These sources might have different processing requirements
+* fileuploader
+  * Used to upload files to storage services
+  * Used for storing large payloads or debug information
+* rsourcesService
+  * Used to handle RudderStack sources (Reverse ETL)
+  * Provides special handling for jobs from RudderStack sources
+* enrichers
+  * Used to enrich events with additional data
+  * Applied in a pipeline during event processing
+  * Each enricher can modify the event or add new properties
+* transformerFeaturesService
+  * Used to fetch transformer features and configurations
+  * Determines which transformations are available and how they should be applied
+* adaptiveLimit
+  * Used to dynamically adjust limits based on system load
+  * Helps prevent overloading the system during high traffic
+* storePlocker
+  * Used to lock partitions during store operations
+  * Ensures that only one process is writing to a partition at a time
+  * Prevents race conditions and data corruption
+* trackedUsersReporter
+  * Used to report tracked users to the control plane
+  * Helps with user analytics and tracking
+* sourceObservers
+  * Used to observe events from sources
+  * Allows for monitoring and metrics collection
 
 ## Router
 
-TODO
+* jobsDB
+  * Used to read jobs that were stored by the Processor
+  * The Router picks up jobs from this database and sends them to destinations
+  * Uses a transaction to mark jobs as executing to ensure they're not picked up by other Router instances
+  * Provides at-least-once delivery guarantee for events
+* errorDB
+  * Used to store jobs that failed during delivery to destinations
+  * Allows for retry of failed jobs with exponential backoff
+  * Helps ensure eventual delivery of events even in case of temporary destination failures
+* throttlerFactory
+  * Used to create throttlers for rate limiting requests to destinations
+  * Prevents overwhelming destinations with too many requests
+  * Implements various throttling strategies (e.g., GCRA, token bucket)
+* backendConfig
+  * Used to fetch control plane configurations
+  * Provides information about destinations and their configurations
+  * The Router uses this to determine how to send events to different destinations
+  * It has a cache to reduce the number of API calls to the control plane
+* Reporting
+  * Used to report metrics about event delivery
+  * Helps with monitoring and diagnostics
+  * Reports both successful and failed deliveries
+* transientSources
+  * Used to handle transient sources that don't persist data
+  * These sources might have different delivery requirements
+* rsourcesService
+  * Used to handle RudderStack sources (Reverse ETL)
+  * Provides special handling for jobs from RudderStack sources
+* transformerFeaturesService
+  * Used to fetch transformer features and configurations
+  * Determines which transformations are available and how they should be applied
+* debugger
+  * Used to debug destination events
+  * Uploads events to the control plane for debugging purposes
+  * Similar to the source debugger in the Gateway, there's no guarantee that events will be uploaded successfully
+* pendingEventsRegistry
+  * Used to track pending events in the system
+  * Helps with monitoring and diagnostics
+* adaptiveLimit
+  * Used to dynamically adjust limits based on system load
+  * Helps prevent overloading the system during high traffic
+* destinationResponseHandler
+  * Used to handle responses from destinations
+  * Processes success and error responses
+  * Updates job status based on destination responses
+* netHandle
+  * Used to make HTTP requests to destinations
+  * Handles retries and timeouts
+  * Implements connection pooling for better performance
+* customDestinationManager
+  * Used to manage custom destinations
+  * Handles special requirements for custom destinations
+* transformer
+  * Used to transform events before sending to destinations
+  * Applies destination-specific transformations
+* oauth
+  * Used to handle OAuth authentication for destinations
+  * Manages OAuth tokens and refreshes them when needed
+  * Ensures secure communication with destinations that require OAuth
 
 ## BatchRouter
 
-TODO
+* jobsDB
+  * Used to read jobs that were stored by the Processor
+  * The BatchRouter picks up jobs from this database and batches them before sending to destinations
+  * Uses a transaction to mark jobs as executing to ensure they're not picked up by other BatchRouter instances
+  * Provides at-least-once delivery guarantee for events
+* errorDB
+  * Used to store jobs that failed during delivery to destinations
+  * Allows for retry of failed jobs with exponential backoff
+  * Helps ensure eventual delivery of events even in case of temporary destination failures
+* reporting
+  * Used to report metrics about batch delivery
+  * Helps with monitoring and diagnostics
+  * Reports both successful and failed deliveries
+* backendConfig
+  * Used to fetch control plane configurations
+  * Provides information about destinations and their configurations
+  * The BatchRouter uses this to determine how to batch and send events to different destinations
+  * It has a cache to reduce the number of API calls to the control plane
+* fileManagerFactory
+  * Used to create file managers for different storage providers
+  * The BatchRouter uses file managers to store batched events before sending them to destinations
+  * Supports various storage providers (e.g., S3, GCS, Azure Blob)
+  * Implements retries and error handling for file operations
+* transientSources
+  * Used to handle transient sources that don't persist data
+  * These sources might have different batching requirements
+* rsourcesService
+  * Used to handle RudderStack sources (Reverse ETL)
+  * Provides special handling for jobs from RudderStack sources
+* warehouseClient
+  * Used to communicate with the warehouse service
+  * Sends batched events to data warehouses
+  * Handles warehouse-specific requirements and limitations
+* debugger
+  * Used to debug destination events
+  * Uploads events to the control plane for debugging purposes
+  * Similar to the source debugger in the Gateway, there's no guarantee that events will be uploaded successfully
+* Diagnostics
+  * Used for system diagnostics and monitoring
+  * Helps identify and troubleshoot issues
+* pendingEventsRegistry
+  * Used to track pending events in the system
+  * Helps with monitoring and diagnostics
+* adaptiveLimit
+  * Used to dynamically adjust limits based on system load
+  * Helps prevent overloading the system during high traffic
+* isolationStrategy
+  * Used to isolate batches by different criteria
+  * Ensures that events are properly grouped and processed
+* netHandle
+  * Used to make HTTP requests to destinations
+  * Handles retries and timeouts
+  * Implements connection pooling for better performance
+* asyncDestinationStruct
+  * Used to manage asynchronous destinations
+  * Handles the complexities of asynchronous communication with destinations
+  * Implements polling for job status and result retrieval
+  * Ensures that events are properly tracked and accounted for even with asynchronous processing
