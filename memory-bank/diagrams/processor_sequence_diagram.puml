@@ -1,0 +1,109 @@
+@startuml Processor Sequence Diagram
+
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+
+title Processor Data Workflow and Component Interactions
+
+actor Client
+participant "Gateway" as gateway
+participant "JobsDB (Gateway)" as gatewayDB
+participant "Processor" as processor
+participant "Deduplication" as dedup
+participant "Event Schemas" as eventSchemas
+participant "Archival" as archival
+participant "User Transformer" as userTransformer
+participant "Destination Transformer" as destTransformer
+participant "Rate Limiting" as rateLimiting
+participant "Reporting" as reporting
+participant "RSources" as rsources
+participant "JobsDB (Router)" as routerDB
+participant "JobsDB (Batch Router)" as batchRouterDB
+participant "Router" as router
+participant "Batch Router" as batchRouter
+
+note over processor
+  The Processor is responsible for:
+  1. Reading events from Gateway JobsDB
+  2. Transforming events for destinations
+  3. Routing events to appropriate destinations
+  4. Handling deduplication, archival, and reporting
+end note
+
+== Initialization ==
+processor -> gatewayDB: Setup connection
+processor -> routerDB: Setup connection
+processor -> batchRouterDB: Setup connection
+processor -> eventSchemas: Setup connection
+processor -> archival: Setup connection
+processor -> reporting: Setup connection
+processor -> dedup: Setup connection
+processor -> rateLimiting: Setup connection
+processor -> rsources: Setup connection
+
+== Data Processing Workflow ==
+
+Client -> gateway: Send events
+gateway -> gatewayDB: Store events as jobs
+
+group Processor Pipeline
+    == Preprocess Stage ==
+    processor -> gatewayDB: Get jobs (getJobsStage)
+    activate processor
+    note right: Fetches jobs from Gateway JobsDB
+
+    processor -> gatewayDB: Mark jobs as executing
+
+    processor -> processor: Parse and validate events (preprocessStage)
+    note right: Parses job payloads into events
+
+    processor -> dedup: Check for duplicate events
+    dedup --> processor: Return deduplication results
+    note right: Filters out duplicate events
+
+    == Pre-transformation Stage ==
+    processor -> eventSchemas: Store events for schema validation (pretransformStage)
+    note right: Sends events to Event Schemas service
+
+    processor -> archival: Store events for archival
+    note right: Archives raw events for compliance
+
+    == User Transformation Stage ==
+    processor -> userTransformer: Transform events (userTransformStage)
+    note right: Applies user-defined transformations
+    userTransformer --> processor: Return transformed events
+
+    == Destination Transformation Stage ==
+    processor -> destTransformer: Transform events for destinations (destinationTransformStage)
+    note right: Transforms events for specific destinations
+    destTransformer --> processor: Return destination-specific events
+
+    processor -> rateLimiting: Apply rate limiting
+    rateLimiting --> processor: Return rate limiting results
+    note right: Enforces rate limits for destinations
+
+    == Store Stage ==
+    processor -> routerDB: Store events for router destinations (storeStage)
+    note right: Stores events for real-time destinations
+
+    processor -> batchRouterDB: Store events for batch router destinations
+    note right: Stores events for batch destinations
+
+    processor -> rsources: Update statistics
+    note right: Updates source-level metrics
+
+    processor -> reporting: Report metrics
+    note right: Reports processing metrics
+
+    processor -> gatewayDB: Update job statuses
+    note right: Marks jobs as processed
+    deactivate processor
+end
+
+== Post-Processing ==
+routerDB -> router: Process router jobs
+note right: Router picks up jobs and sends to destinations
+batchRouterDB -> batchRouter: Process batch router jobs
+note right: Batch Router aggregates and sends in batches
+
+@enduml

@@ -1,0 +1,69 @@
+@startuml Gateway Sequence Diagram
+
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+
+title Gateway Data Workflow and Component Interactions
+
+actor Client
+participant "Gateway" as gateway
+participant "JobsDB" as jobsDB
+participant "Error DB" as errDB
+participant "Rate Limiter" as rateLimiter
+participant "Source Debugger" as sourceDebugger
+participant "RSources" as rsources
+participant "Backend Config" as backendConfig
+participant "Processor" as processor
+
+note over gateway
+  The Gateway is responsible for:
+  1. Receiving events from clients
+  2. Validating and batching events
+  3. Storing events in JobsDB
+  4. Sending responses back to clients
+end note
+
+== Initialization ==
+gateway -> backendConfig: Subscribe to configuration changes
+gateway -> jobsDB: Setup connection
+gateway -> errDB: Setup connection
+gateway -> rateLimiter: Setup connection
+gateway -> sourceDebugger: Setup connection
+gateway -> rsources: Setup connection
+
+== Data Processing Workflow ==
+
+Client -> gateway: Send events (HTTP request)
+activate gateway
+
+group Request Processing
+    gateway -> gateway: Parse and validate request
+    gateway -> rateLimiter: Check rate limits
+    alt Rate limited
+        gateway --> Client: Too many requests (429)
+    else Not rate limited
+        gateway -> gateway: Extract jobs from payload
+
+        alt User suppressed
+            gateway --> Client: Success (events suppressed)
+        else User not suppressed
+            gateway -> gateway: Batch events
+
+            gateway -> jobsDB: Store jobs in transaction
+            jobsDB --> gateway: Store result
+
+            gateway -> rsources: Update statistics
+
+            gateway -> sourceDebugger: Record events for debugging
+
+            gateway --> Client: Success response
+        end
+    end
+end
+
+deactivate gateway
+
+== Post-Processing ==
+jobsDB -> processor: Processor picks up jobs for processing
+
+@enduml

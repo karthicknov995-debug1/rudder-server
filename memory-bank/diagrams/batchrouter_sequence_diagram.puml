@@ -1,0 +1,88 @@
+@startuml Batch Router Sequence Diagram
+
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+
+title Batch Router Data Workflow and Component Interactions
+
+participant "Processor" as processor
+participant "JobsDB (Batch Router)" as batchRouterDB
+participant "Batch Router" as batchRouter
+participant "Error DB" as errorDB
+participant "Backend Config" as backendConfig
+participant "File Manager" as fileManager
+participant "Destination Debugger" as destDebugger
+participant "RSources" as rsources
+participant "Warehouse Client" as warehouseClient
+participant "Async Destination Manager" as asyncDestManager
+participant "Storage Provider" as storageProvider
+
+note over batchRouter
+  The Batch Router is responsible for:
+  1. Reading events from Batch Router JobsDB
+  2. Batching events for destinations
+  3. Uploading batched events to storage providers
+  4. Notifying warehouses about new data
+  5. Handling retries and errors
+end note
+
+== Initialization ==
+batchRouter -> backendConfig: Subscribe to configuration changes
+batchRouter -> batchRouterDB: Setup connection
+batchRouter -> errorDB: Setup connection
+batchRouter -> fileManager: Setup connection
+batchRouter -> destDebugger: Setup connection
+batchRouter -> rsources: Setup connection
+batchRouter -> asyncDestManager: Start async destination manager
+
+== Data Processing Workflow ==
+
+processor -> batchRouterDB: Store events for batch router destinations
+activate batchRouter
+
+group Batch Router Pipeline
+    batchRouter -> batchRouterDB: Get jobs (getWorkerJobs)
+    note right: Fetches jobs from Batch Router JobsDB
+
+    batchRouter -> batchRouterDB: Mark jobs as executing
+
+    batchRouter -> batchRouter: Group jobs by destination
+    note right: Groups jobs for batch processing
+
+    batchRouter -> batchRouter: Split batches by time window
+    note right: Ensures batches respect time windows
+
+    alt Warehouse destination
+        batchRouter -> fileManager: Upload data to storage
+        fileManager -> storageProvider: Store data file
+        storageProvider --> fileManager: Upload result
+        fileManager --> batchRouter: Upload result
+
+        batchRouter -> warehouseClient: Ping warehouse with file location
+        warehouseClient --> batchRouter: Ping result
+    else Other batch destination
+        batchRouter -> asyncDestManager: Upload data to destination
+        asyncDestManager -> storageProvider: Store data file
+        storageProvider --> asyncDestManager: Upload result
+        asyncDestManager --> batchRouter: Upload result
+    end
+
+    alt Successful upload
+        batchRouter -> batchRouterDB: Mark jobs as succeeded
+        batchRouter -> rsources: Update statistics
+        batchRouter -> destDebugger: Record successful upload
+    else Failed upload (retriable)
+        batchRouter -> batchRouterDB: Mark jobs for retry
+        batchRouter -> rsources: Update statistics
+        batchRouter -> destDebugger: Record failed upload
+    else Failed upload (non-retriable)
+        batchRouter -> errorDB: Store failed jobs
+        batchRouter -> batchRouterDB: Mark jobs as aborted
+        batchRouter -> rsources: Update statistics
+        batchRouter -> destDebugger: Record failed upload
+    end
+end
+
+deactivate batchRouter
+
+@enduml

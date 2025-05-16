@@ -1,0 +1,79 @@
+@startuml Router Sequence Diagram
+
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+
+title Router Data Workflow and Component Interactions
+
+participant "Processor" as processor
+participant "JobsDB (Router)" as routerDB
+participant "Router" as router
+participant "Error DB" as errorDB
+participant "Backend Config" as backendConfig
+participant "Transformer" as transformer
+participant "OAuth Service" as oauth
+participant "Destination Debugger" as destDebugger
+participant "RSources" as rsources
+participant "Destination API" as destAPI
+
+note over router
+  The Router is responsible for:
+  1. Reading events from Router JobsDB
+  2. Transforming events for destinations
+  3. Sending events to destinations
+  4. Handling retries and errors
+end note
+
+== Initialization ==
+router -> backendConfig: Subscribe to configuration changes
+router -> routerDB: Setup connection
+router -> errorDB: Setup connection
+router -> oauth: Setup connection
+router -> destDebugger: Setup connection
+router -> rsources: Setup connection
+router -> transformer: Setup connection
+
+== Data Processing Workflow ==
+
+processor -> routerDB: Store events for router destinations
+activate router
+
+group Router Pipeline
+    router -> routerDB: Get jobs (pickup)
+    note right: Fetches jobs from Router JobsDB
+
+    router -> routerDB: Mark jobs as executing
+
+    router -> router: Find worker slots for jobs
+    note right: Assigns jobs to available workers
+
+    router -> router: Check rate limits and throttling
+
+    router -> transformer: Transform events for destinations
+    transformer --> router: Return transformed events
+
+    router -> oauth: Get OAuth credentials (if needed)
+    oauth --> router: Return OAuth credentials
+
+    router -> destAPI: Send events to destination
+    destAPI --> router: Return response
+
+    alt Successful delivery
+        router -> routerDB: Mark jobs as succeeded
+        router -> rsources: Update statistics
+        router -> destDebugger: Record successful delivery
+    else Failed delivery (retriable)
+        router -> routerDB: Mark jobs for retry
+        router -> rsources: Update statistics
+        router -> destDebugger: Record failed delivery
+    else Failed delivery (non-retriable)
+        router -> errorDB: Store failed jobs
+        router -> routerDB: Mark jobs as aborted
+        router -> rsources: Update statistics
+        router -> destDebugger: Record failed delivery
+    end
+end
+
+deactivate router
+
+@enduml
