@@ -1,0 +1,87 @@
+@startuml Gateway Sequence Detailed Diagram
+
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+skinparam NoteBackgroundColor LightYellow
+skinparam NoteBorderColor DarkGray
+
+title Gateway Data Workflow and Component Interactions (with Delivery Semantics)
+
+actor Client
+participant "Gateway" as gateway
+participant "JobsDB" as jobsDB #LightGreen
+note right of jobsDB
+  Uses transactions to ensure data consistency
+  Provides at-least-once delivery guarantee for events
+end note
+participant "Error DB" as errDB #LightGreen
+note right of errDB
+  Errors are stored in a transaction to ensure data consistency
+  Provides reliable error tracking and retry capabilities
+end note
+participant "Rate Limiter" as rateLimiter
+participant "Source Debugger" as sourceDebugger #LightCoral
+note right of sourceDebugger
+  Fire-and-forget communication pattern
+  No delivery guarantees
+  Asynchronous - debugging information may be lost
+  without affecting the main event processing pipeline
+end note
+participant "RSources" as rsources
+participant "Backend Config" as backendConfig
+participant "Processor" as processor
+
+note over gateway
+  The Gateway is responsible for:
+  1. Receiving events from clients
+  2. Validating and batching events
+  3. Storing events in JobsDB
+  4. Sending responses back to clients
+end note
+
+== Initialization ==
+gateway -> backendConfig: Subscribe to configuration changes
+gateway -> jobsDB: Setup connection
+gateway -> errDB: Setup connection
+gateway -> rateLimiter: Setup connection
+gateway -> sourceDebugger: Setup connection
+gateway -> rsources: Setup connection
+
+== Data Processing Workflow ==
+
+Client -> gateway: Send events (HTTP request)
+activate gateway
+
+group Request Processing
+    gateway -> gateway: Parse and validate request
+    gateway -> rateLimiter: Check rate limits
+    alt Rate limited
+        gateway --> Client: Too many requests (429)
+    else Not rate limited
+        gateway -> gateway: Extract jobs from payload
+
+        alt User suppressed
+            gateway --> Client: Success (events suppressed)
+        else User not suppressed
+            gateway -> gateway: Batch events
+
+            gateway -> jobsDB: Store jobs in transaction
+            note right: Transactional - ensures data consistency
+            jobsDB --> gateway: Store result
+
+            gateway -> rsources: Update statistics
+
+            gateway -> sourceDebugger: Record events for debugging
+            note right: Fire-and-forget - no delivery guarantees
+
+            gateway --> Client: Success response
+        end
+    end
+end
+
+deactivate gateway
+
+== Post-Processing ==
+jobsDB -> processor: Processor picks up jobs for processing
+
+@enduml

@@ -1,0 +1,122 @@
+@startuml Router Sequence Detailed Diagram
+
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+skinparam NoteBackgroundColor LightYellow
+skinparam NoteBorderColor DarkGray
+
+title Router Data Workflow and Component Interactions (with Delivery Semantics)
+
+participant "Processor" as processor
+participant "JobsDB (Router)" as routerDB #LightGreen
+note right of routerDB
+  Uses a transaction to mark jobs as executing
+  Ensures jobs aren't picked up by other Router instances
+  Provides at-least-once delivery guarantee for events
+  Transaction isolation ensures data consistency
+  Jobs marked as processed within same transaction after delivery
+end note
+participant "Router" as router
+participant "Error DB" as errorDB #LightGreen
+note right of errorDB
+  Used to store jobs that failed during delivery
+  Allows for retry of failed jobs with exponential backoff
+  Failed jobs stored in a transaction to ensure data consistency
+  Transaction ensures jobs are either delivered or stored for retry
+end note
+participant "Backend Config" as backendConfig
+participant "Transformer" as transformer
+participant "OAuth Service" as oauth
+participant "Destination Debugger" as destDebugger #LightCoral
+note right of destDebugger
+  Fire-and-forget communication pattern
+  No delivery guarantees
+  Sent outside main transaction flow
+  Failures don't affect event delivery
+end note
+participant "RSources" as rsources
+participant "Reporting" as reporting #LightBlue
+note right of reporting
+  Uses Transactional Outbox pattern
+  Reports both successful and failed deliveries
+  Metrics stored in transaction with job status updates
+  Ensures metrics only recorded when job status changes committed
+end note
+participant "Destination API" as destAPI
+
+note over router
+  The Router is responsible for:
+  1. Reading events from Router JobsDB
+  2. Transforming events for destinations
+  3. Sending events to destinations
+  4. Handling retries and errors
+end note
+
+== Initialization ==
+router -> backendConfig: Subscribe to configuration changes
+router -> routerDB: Setup connection
+router -> errorDB: Setup connection
+router -> oauth: Setup connection
+router -> destDebugger: Setup connection
+router -> rsources: Setup connection
+router -> transformer: Setup connection
+router -> reporting: Setup connection
+
+== Data Processing Workflow ==
+
+processor -> routerDB: Store events for router destinations
+activate router
+
+group Router Pipeline
+    router -> routerDB: Get jobs (pickup)
+    note right: Transactional - fetches jobs from Router JobsDB
+
+    router -> routerDB: Mark jobs as executing
+    note right: Transactional - ensures jobs aren't processed multiple times
+
+    router -> router: Find worker slots for jobs
+    note right: Assigns jobs to available workers
+
+    router -> router: Check rate limits and throttling
+
+    router -> transformer: Transform events for destinations
+    transformer --> router: Return transformed events
+
+    router -> oauth: Get OAuth credentials (if needed)
+    oauth --> router: Return OAuth credentials
+
+    router -> destAPI: Send events to destination
+    destAPI --> router: Return response
+
+    alt Successful delivery
+        router -> routerDB: Mark jobs as succeeded
+        note right: Transactional - ensures job status consistency
+        router -> rsources: Update statistics
+        router -> destDebugger: Record successful delivery
+        note right: Fire-and-forget - no delivery guarantees
+        router -> reporting: Report successful delivery
+        note right: Transactional Outbox - ensures reliable reporting
+    else Failed delivery (retriable)
+        router -> routerDB: Mark jobs for retry
+        note right: Transactional - ensures job status consistency
+        router -> rsources: Update statistics
+        router -> destDebugger: Record failed delivery
+        note right: Fire-and-forget - no delivery guarantees
+        router -> reporting: Report failed delivery
+        note right: Transactional Outbox - ensures reliable reporting
+    else Failed delivery (non-retriable)
+        router -> errorDB: Store failed jobs
+        note right: Transactional - ensures error tracking consistency
+        router -> routerDB: Mark jobs as aborted
+        note right: Transactional - ensures job status consistency
+        router -> rsources: Update statistics
+        router -> destDebugger: Record failed delivery
+        note right: Fire-and-forget - no delivery guarantees
+        router -> reporting: Report failed delivery
+        note right: Transactional Outbox - ensures reliable reporting
+    end
+end
+
+deactivate router
+
+@enduml

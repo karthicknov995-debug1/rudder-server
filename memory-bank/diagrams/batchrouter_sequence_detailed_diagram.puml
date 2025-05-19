@@ -1,0 +1,142 @@
+@startuml Batch Router Sequence Detailed Diagram
+
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+skinparam NoteBackgroundColor LightYellow
+skinparam NoteBorderColor DarkGray
+
+title Batch Router Data Workflow and Component Interactions (with Delivery Semantics)
+
+participant "Processor" as processor
+participant "JobsDB (Batch Router)" as batchRouterDB #LightGreen
+note right of batchRouterDB
+  Uses a transaction to mark jobs as executing
+  Ensures jobs aren't picked up by other BatchRouter instances
+  Provides at-least-once delivery guarantee for events
+  Transaction isolation ensures data consistency
+  Jobs marked as processed within same transaction after delivery
+end note
+participant "Batch Router" as batchRouter
+participant "Error DB" as errorDB #LightGreen
+note right of errorDB
+  Used to store jobs that failed during delivery
+  Allows for retry of failed jobs with exponential backoff
+  Failed jobs stored in a transaction to ensure data consistency
+  Transaction ensures jobs are either delivered or stored for retry
+end note
+participant "Backend Config" as backendConfig
+participant "File Manager" as fileManager
+participant "Destination Debugger" as destDebugger #LightCoral
+note right of destDebugger
+  Fire-and-forget communication pattern
+  No delivery guarantees
+  Sent outside main transaction flow
+  Failures don't affect batch processing
+end note
+participant "RSources" as rsources
+participant "Reporting" as reporting #LightBlue
+note right of reporting
+  Uses Transactional Outbox pattern
+  Reports both successful and failed deliveries
+  Metrics stored in transaction with job status updates
+  Ensures metrics only recorded when job status changes committed
+end note
+participant "Warehouse Client" as warehouseClient
+participant "Async Destination Manager" as asyncDestManager
+participant "Storage Provider" as storageProvider
+participant "Diagnostics" as diagnostics #LightCoral
+note right of diagnostics
+  Fire-and-forget communication pattern
+  No delivery guarantees
+  Sent asynchronously to avoid impacting main pipeline
+end note
+
+note over batchRouter
+  The Batch Router is responsible for:
+  1. Reading events from Batch Router JobsDB
+  2. Batching events for destinations
+  3. Uploading batched events to storage providers
+  4. Notifying warehouses about new data
+  5. Handling retries and errors
+end note
+
+== Initialization ==
+batchRouter -> backendConfig: Subscribe to configuration changes
+batchRouter -> batchRouterDB: Setup connection
+batchRouter -> errorDB: Setup connection
+batchRouter -> fileManager: Setup connection
+batchRouter -> destDebugger: Setup connection
+batchRouter -> rsources: Setup connection
+batchRouter -> reporting: Setup connection
+batchRouter -> diagnostics: Setup connection
+batchRouter -> asyncDestManager: Start async destination manager
+
+== Data Processing Workflow ==
+
+processor -> batchRouterDB: Store events for batch router destinations
+activate batchRouter
+
+group Batch Router Pipeline
+    batchRouter -> batchRouterDB: Get jobs (getWorkerJobs)
+    note right: Transactional - fetches jobs from Batch Router JobsDB
+
+    batchRouter -> batchRouterDB: Mark jobs as executing
+    note right: Transactional - ensures jobs aren't processed multiple times
+
+    batchRouter -> batchRouter: Group jobs by destination
+    note right: Groups jobs for batch processing
+
+    batchRouter -> batchRouter: Split batches by time window
+    note right: Ensures batches respect time windows
+
+    alt Warehouse destination
+        batchRouter -> fileManager: Upload data to storage
+        fileManager -> storageProvider: Store data file
+        storageProvider --> fileManager: Upload result
+        fileManager --> batchRouter: Upload result
+
+        batchRouter -> warehouseClient: Ping warehouse with file location
+        note right: Reliable communication with retries and error handling
+        warehouseClient --> batchRouter: Ping result
+    else Other batch destination
+        batchRouter -> asyncDestManager: Upload data to destination
+        asyncDestManager -> storageProvider: Store data file
+        storageProvider --> asyncDestManager: Upload result
+        asyncDestManager --> batchRouter: Upload result
+    end
+
+    batchRouter -> diagnostics: Send diagnostic information
+    note right: Fire-and-forget - no delivery guarantees
+
+    alt Successful upload
+        batchRouter -> batchRouterDB: Mark jobs as succeeded
+        note right: Transactional - ensures job status consistency
+        batchRouter -> rsources: Update statistics
+        batchRouter -> destDebugger: Record successful upload
+        note right: Fire-and-forget - no delivery guarantees
+        batchRouter -> reporting: Report successful upload
+        note right: Transactional Outbox - ensures reliable reporting
+    else Failed upload (retriable)
+        batchRouter -> batchRouterDB: Mark jobs for retry
+        note right: Transactional - ensures job status consistency
+        batchRouter -> rsources: Update statistics
+        batchRouter -> destDebugger: Record failed upload
+        note right: Fire-and-forget - no delivery guarantees
+        batchRouter -> reporting: Report failed upload
+        note right: Transactional Outbox - ensures reliable reporting
+    else Failed upload (non-retriable)
+        batchRouter -> errorDB: Store failed jobs
+        note right: Transactional - ensures error tracking consistency
+        batchRouter -> batchRouterDB: Mark jobs as aborted
+        note right: Transactional - ensures job status consistency
+        batchRouter -> rsources: Update statistics
+        batchRouter -> destDebugger: Record failed upload
+        note right: Fire-and-forget - no delivery guarantees
+        batchRouter -> reporting: Report failed upload
+        note right: Transactional Outbox - ensures reliable reporting
+    end
+end
+
+deactivate batchRouter
+
+@enduml

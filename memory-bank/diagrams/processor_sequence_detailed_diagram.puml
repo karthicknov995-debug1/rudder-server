@@ -1,0 +1,157 @@
+@startuml Processor Sequence Detailed Diagram
+
+skinparam ParticipantPadding 20
+skinparam BoxPadding 10
+skinparam NoteBackgroundColor LightYellow
+skinparam NoteBorderColor DarkGray
+
+title Processor Data Workflow and Component Interactions (with Delivery Semantics)
+
+actor Client
+participant "Gateway" as gateway
+participant "JobsDB (Gateway)" as gatewayDB #LightGreen
+note right of gatewayDB
+  Uses a transaction to mark jobs as executing
+  Ensures jobs aren't picked up by other Processor instances
+end note
+participant "Processor" as processor
+participant "Deduplication" as dedup
+participant "Event Schemas" as eventSchemas #LightGreen
+note right of eventSchemas
+  Schema operations performed within a transaction
+  Ensures data consistency
+  Uses same transaction as other DB operations
+end note
+participant "Archival" as archival #LightGreen
+note right of archival
+  Operations performed within a transaction
+  Ensures data consistency
+  Uses same transaction as other DB operations
+end note
+participant "User Transformer" as userTransformer
+participant "Destination Transformer" as destTransformer
+participant "Rate Limiting" as rateLimiting
+participant "Reporting" as reporting #LightBlue
+note right of reporting
+  Uses Transactional Outbox pattern
+  Stores metrics in outbox table in Postgres
+  Sends metrics via HTTP client
+  Reports both successful and failed events
+end note
+participant "RSources" as rsources
+participant "JobsDB (Router)" as routerDB #LightGreen
+note right of routerDB
+  Uses a transaction to ensure atomicity when writing jobs
+end note
+participant "JobsDB (Batch Router)" as batchRouterDB #LightGreen
+note right of batchRouterDB
+  Uses a transaction to ensure atomicity when writing jobs
+end note
+participant "Destination Debugger" as destDebugger #LightCoral
+note right of destDebugger
+  Fire-and-forget communication pattern
+  No delivery guarantees
+  Sent outside main transaction flow
+end note
+participant "Transformation Debugger" as transDebugger #LightCoral
+note right of transDebugger
+  Fire-and-forget communication pattern
+  No delivery guarantees
+  Sent outside main transaction flow
+end note
+participant "Router" as router
+participant "Batch Router" as batchRouter
+
+note over processor
+  The Processor is responsible for:
+  1. Reading events from Gateway JobsDB
+  2. Transforming events for destinations
+  3. Routing events to appropriate destinations
+  4. Handling deduplication, archival, and reporting
+end note
+
+== Initialization ==
+processor -> gatewayDB: Setup connection
+processor -> routerDB: Setup connection
+processor -> batchRouterDB: Setup connection
+processor -> eventSchemas: Setup connection
+processor -> archival: Setup connection
+processor -> reporting: Setup connection
+processor -> dedup: Setup connection
+processor -> rateLimiting: Setup connection
+processor -> rsources: Setup connection
+processor -> destDebugger: Setup connection
+processor -> transDebugger: Setup connection
+
+== Data Processing Workflow ==
+
+Client -> gateway: Send events
+gateway -> gatewayDB: Store events as jobs
+
+group Processor Pipeline
+    == Preprocess Stage ==
+    processor -> gatewayDB: Get jobs (getJobsStage)
+    activate processor
+    note right: Fetches jobs from Gateway JobsDB
+
+    processor -> gatewayDB: Mark jobs as executing
+    note right: Transactional - ensures jobs aren't processed multiple times
+
+    processor -> processor: Parse and validate events (preprocessStage)
+    note right: Parses job payloads into events
+
+    processor -> dedup: Check for duplicate events
+    dedup --> processor: Return deduplication results
+    note right: Filters out duplicate events
+
+    == Pre-transformation Stage ==
+    processor -> eventSchemas: Store events for schema validation (pretransformStage)
+    note right: Transactional - ensures schema consistency
+
+    processor -> archival: Store events for archival
+    note right: Transactional - ensures archival consistency
+
+    == User Transformation Stage ==
+    processor -> userTransformer: Transform events (userTransformStage)
+    note right: Applies user-defined transformations
+    userTransformer --> processor: Return transformed events
+
+    processor -> transDebugger: Record transformation events for debugging
+    note right: Fire-and-forget - no delivery guarantees
+
+    == Destination Transformation Stage ==
+    processor -> destTransformer: Transform events for destinations (destinationTransformStage)
+    note right: Transforms events for specific destinations
+    destTransformer --> processor: Return destination-specific events
+
+    processor -> rateLimiting: Apply rate limiting
+    rateLimiting --> processor: Return rate limiting results
+    note right: Enforces rate limits for destinations
+
+    == Store Stage ==
+    processor -> routerDB: Store events for router destinations (storeStage)
+    note right: Transactional - ensures atomicity
+
+    processor -> batchRouterDB: Store events for batch router destinations
+    note right: Transactional - ensures atomicity
+
+    processor -> destDebugger: Record destination events for debugging
+    note right: Fire-and-forget - no delivery guarantees
+
+    processor -> rsources: Update statistics
+
+    processor -> reporting: Report metrics
+    note right: Transactional Outbox pattern - ensures reliable reporting
+
+    processor -> gatewayDB: Update job statuses
+    note right: Transactional - marks jobs as processed
+    deactivate processor
+end
+
+== Post-Processing ==
+routerDB -> router: Process router jobs
+note right: Router picks up jobs and sends to destinations
+batchRouterDB -> batchRouter: Process batch router jobs
+note right: Batch Router aggregates and sends in batches
+
+@enduml
