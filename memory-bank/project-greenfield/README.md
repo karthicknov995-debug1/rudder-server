@@ -1,5 +1,7 @@
 # Hard dependencies
 
+# TODO partitioning strategies
+
 ## Isolation Modes
 
 ### Processor Isolation Modes
