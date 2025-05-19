@@ -1,5 +1,31 @@
 # Hard dependencies
 
+## Isolation Modes
+
+### Processor Isolation Modes
+The Processor supports three isolation modes:
+1. **None** - No isolation, all jobs are processed together
+2. **Workspace** - Jobs are isolated by workspace, ensuring that jobs from different workspaces are processed separately
+3. **Source** - Jobs are isolated by source, ensuring that jobs from different sources are processed separately
+
+These isolation modes affect how jobs are queried from the database and processed, providing different levels of
+isolation and parallelism.
+
+### Router Isolation Modes
+The Router supports three isolation modes:
+1. **None** - No isolation, all jobs are processed together
+2. **Workspace** - Jobs are isolated by workspace, ensuring that jobs from different workspaces are processed separately
+3. **Destination** - Jobs are isolated by destination, ensuring that jobs for different destinations are processed separately
+
+### BatchRouter Isolation Modes
+The BatchRouter supports three isolation modes:
+1. **None** - No isolation, all jobs are processed together
+2. **Workspace** - Jobs are isolated by workspace, ensuring that jobs from different workspaces are processed separately
+3. **Destination** - Jobs are isolated by destination, ensuring that jobs for different destinations are processed separately
+
+The isolation modes provide different trade-offs between throughput, resource utilization, and isolation guarantees.
+They help ensure that issues in one partition (workspace, source, or destination) don't affect others.
+
 ## Gateway
 
 * GW job-status, rudder-sources depends on this
@@ -20,10 +46,14 @@
       RudderStack dataplane with a writeKey that has a connection setup to send to SnowFlake via RudderServer
     * It would be disabled for dataplanes run by RudderStack but enabled for OpenSource users
 * JobsDB
-  * Used to just store jobs that the processor can pick up later
+  * Used to store jobs that the processor can pick up later
+  * Jobs are stored in a transaction to ensure data consistency
+  * Provides at-least-once delivery guarantee for events
 * errDB
   * Used to save webhook failures
   * In the IngestionSvc we publish webhook failures into a procError topic instead, so we could do the same here
+  * Errors are stored in a transaction to ensure data consistency
+  * Provides reliable error tracking and retry capabilities
 * rateLimiter
   * We use the usual throttler, could be GCRA, could be something else (e.g. distributed)
   * We do `if sourcesJobRunID == "" && sourcesTaskRunID == ""` when limiting so we don't rate limit rudder-sources
@@ -38,6 +68,9 @@
     uses a non-buffered go channel to propagate the events. The moment the event is popped from the channel, the GW
     is unblocked and can go ahead with the pipeline, but there is no guaranteed that the event was actually "uploaded".
   * Only successful events are recorded thus shown in LiveEvents.
+  * This is a fire-and-forget communication pattern with no delivery guarantees
+  * The asynchronous nature of this communication means that debugging information may be lost without affecting the
+    main event processing pipeline
 
 ## Processor
 
@@ -55,10 +88,14 @@
   * Uploads events to the control plane for debugging purposes
   * Similar to the source debugger in the Gateway, there's no guarantee that events will be uploaded successfully
   * Only successful events are recorded and shown in the debugger UI
+  * Uses a fire-and-forget communication pattern with no delivery guarantees
+  * The debugging information is sent outside the main transaction flow, so failures don't affect event processing
 * transDebugger
   * Used to debug transformation events
   * Uploads events to the control plane for debugging purposes
   * Similar to the source debugger, there's no guarantee that events will be uploaded successfully
+  * Uses a fire-and-forget communication pattern with no delivery guarantees
+  * The debugging information is sent outside the main transaction flow, so failures don't affect event processing
 * backendConfig
   * Used to fetch control plane configurations
   * Provides information about sources, destinations, and their configurations
@@ -85,9 +122,13 @@
 * eventSchemaDB
   * Used to store event schemas for validation and tracking
   * Part of the schema management system
+  * Schema operations are performed within a transaction to ensure data consistency
+  * Uses the same transaction as other database operations to maintain atomicity
 * archivalDB
   * Used to archive processed events for long-term storage
   * Only used if archival is enabled in the configuration
+  * Operations are performed within a transaction to ensure data consistency
+  * Uses the same transaction as other database operations to maintain atomicity
 * pendingEventsRegistry
   * Used to track pending events in the system
   * Helps with monitoring and diagnostics
@@ -128,10 +169,14 @@
   * The Router picks up jobs from this database and sends them to destinations
   * Uses a transaction to mark jobs as executing to ensure they're not picked up by other Router instances
   * Provides at-least-once delivery guarantee for events
+  * Transaction isolation ensures data consistency and prevents race conditions
+  * Jobs are marked as processed within the same transaction after successful delivery
 * errorDB
   * Used to store jobs that failed during delivery to destinations
   * Allows for retry of failed jobs with exponential backoff
   * Helps ensure eventual delivery of events even in case of temporary destination failures
+  * Failed jobs are stored in a transaction to ensure data consistency
+  * The transaction ensures that jobs are either successfully delivered or properly stored for retry
 * throttlerFactory
   * Used to create throttlers for rate limiting requests to destinations
   * Prevents overwhelming destinations with too many requests
@@ -145,6 +190,9 @@
   * Used to report metrics about event delivery
   * Helps with monitoring and diagnostics
   * Reports both successful and failed deliveries
+  * Uses the Transactional Outbox pattern to ensure metrics are reliably recorded
+  * Metrics are stored in a database transaction along with the job status updates
+  * This ensures that metrics are only recorded when the corresponding job status changes are committed
 * transientSources
   * Used to handle transient sources that don't persist data
   * These sources might have different delivery requirements
@@ -158,6 +206,8 @@
   * Used to debug destination events
   * Uploads events to the control plane for debugging purposes
   * Similar to the source debugger in the Gateway, there's no guarantee that events will be uploaded successfully
+  * Uses a fire-and-forget communication pattern with no delivery guarantees
+  * The debugging information is sent outside the main transaction flow, so failures don't affect event delivery
 * pendingEventsRegistry
   * Used to track pending events in the system
   * Helps with monitoring and diagnostics
@@ -190,14 +240,21 @@
   * The BatchRouter picks up jobs from this database and batches them before sending to destinations
   * Uses a transaction to mark jobs as executing to ensure they're not picked up by other BatchRouter instances
   * Provides at-least-once delivery guarantee for events
+  * Transaction isolation ensures data consistency and prevents race conditions
+  * Jobs are marked as processed within the same transaction after successful batching and delivery
 * errorDB
   * Used to store jobs that failed during delivery to destinations
   * Allows for retry of failed jobs with exponential backoff
   * Helps ensure eventual delivery of events even in case of temporary destination failures
+  * Failed jobs are stored in a transaction to ensure data consistency
+  * The transaction ensures that jobs are either successfully delivered or properly stored for retry
 * reporting
   * Used to report metrics about batch delivery
   * Helps with monitoring and diagnostics
   * Reports both successful and failed deliveries
+  * Uses the Transactional Outbox pattern to ensure metrics are reliably recorded
+  * Metrics are stored in a database transaction along with the job status updates
+  * This ensures that metrics are only recorded when the corresponding job status changes are committed
 * backendConfig
   * Used to fetch control plane configurations
   * Provides information about destinations and their configurations
@@ -218,13 +275,18 @@
   * Used to communicate with the warehouse service
   * Sends batched events to data warehouses
   * Handles warehouse-specific requirements and limitations
+  * Uses a reliable communication pattern with retries and error handling
 * debugger
   * Used to debug destination events
   * Uploads events to the control plane for debugging purposes
   * Similar to the source debugger in the Gateway, there's no guarantee that events will be uploaded successfully
+  * Uses a fire-and-forget communication pattern with no delivery guarantees
+  * The debugging information is sent outside the main transaction flow, so failures don't affect batch processing
 * Diagnostics
   * Used for system diagnostics and monitoring
   * Helps identify and troubleshoot issues
+  * Uses a fire-and-forget communication pattern with no delivery guarantees
+  * Diagnostic information is sent asynchronously to avoid impacting the main processing pipeline
 * pendingEventsRegistry
   * Used to track pending events in the system
   * Helps with monitoring and diagnostics
