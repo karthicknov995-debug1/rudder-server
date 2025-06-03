@@ -126,11 +126,14 @@ They help ensure that issues in one partition (workspace, source, or destination
   * Part of the schema management system
   * Schema operations are performed within a transaction to ensure data consistency
   * Uses the same transaction as other database operations to maintain atomicity
+  * There is no partitioning strategy, we simply have 1 goroutine that processes all events.
+    * On Pulsar we do have a partitioning key and that is the writeKey.
 * archivalDB
   * Used to archive processed events for long-term storage
   * Only used if archival is enabled in the configuration
   * Operations are performed within a transaction to ensure data consistency
   * Uses the same transaction as other database operations to maintain atomicity
+  * Archiving is done via sourceID
 * pendingEventsRegistry
   * Used to track pending events in the system
   * Helps with monitoring and diagnostics
