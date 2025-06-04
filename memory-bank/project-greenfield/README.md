@@ -146,6 +146,11 @@ They help ensure that issues in one partition (workspace, source, or destination
 * rsourcesService
   * Used to handle RudderStack sources (Reverse ETL)
   * Provides special handling for jobs from RudderStack sources
+  * Uses a sharedDB
+    * IncrementStats
+    * AddFailedRecords
+    * CollectStats
+    * Publish
 * enrichers
   * Used to enrich events with additional data
   * Applied in a pipeline during event processing
