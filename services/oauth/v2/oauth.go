@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -135,7 +136,8 @@ Fetch token function is used to fetch the token from the cache or from the contr
 func (h *OAuthHandler) FetchToken(fetchTokenParams *RefreshTokenParams) (int, *AuthResponse, error) {
 	authStats := &OAuthStats{
 		stats:           h.stats,
-		id:              fetchTokenParams.AccountID,
+		destinationId:   fetchTokenParams.DestinationID,
+		accountId:       fetchTokenParams.AccountID,
 		workspaceID:     fetchTokenParams.WorkspaceID,
 		rudderCategory:  "destination",
 		statName:        "",
@@ -145,8 +147,16 @@ func (h *OAuthHandler) FetchToken(fetchTokenParams *RefreshTokenParams) (int, *A
 		destDefName:     fetchTokenParams.DestDefName,
 		flowType:        h.RudderFlowType,
 		action:          "fetch_token",
+		workerId:        fetchTokenParams.WorkerID, // Add worker ID for tracking
 	}
+
 	statshandler := NewStatsHandlerFromOAuthStats(authStats)
+
+	// Track fetch attempt
+	statshandler.Increment("fetch_attempt", stats.Tags{
+		"workerId": strconv.Itoa(fetchTokenParams.WorkerID),
+	})
+
 	return h.GetTokenInfo(fetchTokenParams, "Fetch token", statshandler)
 }
 
@@ -166,7 +176,7 @@ Refresh token function is used to refresh the token from the control plane
 */
 func (h *OAuthHandler) RefreshToken(refTokenParams *RefreshTokenParams) (int, *AuthResponse, error) {
 	authStats := &OAuthStats{
-		id:              refTokenParams.AccountID,
+		accountId:       refTokenParams.AccountID,
 		workspaceID:     refTokenParams.WorkspaceID,
 		rudderCategory:  "destination",
 		statName:        "",
@@ -177,8 +187,17 @@ func (h *OAuthHandler) RefreshToken(refTokenParams *RefreshTokenParams) (int, *A
 		flowType:        h.RudderFlowType,
 		action:          "refresh_token",
 		stats:           h.stats,
+		workerId:        refTokenParams.WorkerID, // Add worker ID for tracking
 	}
+
 	statsHandler := NewStatsHandlerFromOAuthStats(authStats)
+
+	// Track refresh attempt
+	statsHandler.Increment("refresh_attempt", stats.Tags{
+		"workerId":      strconv.Itoa(refTokenParams.WorkerID),
+		"refreshReason": "refresh_requested",
+	})
+
 	return h.GetTokenInfo(refTokenParams, "Refresh token", statsHandler)
 }
 
@@ -208,6 +227,11 @@ func (h *OAuthHandler) GetTokenInfo(refTokenParams *RefreshTokenParams, logTypeN
 	log.Debugn("Lock acquisition took ",
 		logger.NewDurationField("duration", lockAcquisitionTime))
 
+	// Track lock acquisition metrics
+	statsHandler.SendTiming(lockStartTime, "lock_acquisition_latency", stats.Tags{
+		"isCallToCpApi": "false",
+	})
+
 	defer h.CacheMutex.Unlock(refTokenParams.AccountID)
 	defer func() {
 		log.Debugn("[request] :: Released lock for account")
@@ -217,15 +241,35 @@ func (h *OAuthHandler) GetTokenInfo(refTokenParams *RefreshTokenParams, logTypeN
 	}()
 
 	refTokenBody := RefreshTokenBodyParams{}
+	cacheLoadStartTime := time.Now()
 	storedCache, ok := h.Cache.Load(refTokenParams.AccountID)
 	if ok {
+		// Cache hit
+		statsHandler.Increment("cache_hit", stats.Tags{
+			"workerId":       strconv.Itoa(refTokenParams.WorkerID),
+			"cacheOperation": "load",
+		})
+		statsHandler.SendTiming(cacheLoadStartTime, "cache_load_latency", stats.Tags{
+			"result":         "hit",
+			"cacheOperation": "load",
+		})
 		cachedSecret, ok := storedCache.(*AuthResponse)
 		if !ok {
-			log.Debugn("[request] :: Failed to type assert the stored cache")
+			statsHandler.Increment("cache_error", stats.Tags{
+				"errorType":      "type_assertion_failed",
+				"cacheOperation": "load",
+			})
 			return http.StatusInternalServerError, nil, errors.New("failed to type assert the stored cache")
 		}
-		// TODO: verify if the storedCache is nil at this point
-		if !checkIfTokenExpired(cachedSecret.Account, refTokenParams.Secret, h.ExpirationTimeDiff, statsHandler) {
+
+		// Check if token is expired
+		tokenExpired := checkIfTokenExpired(cachedSecret.Account, refTokenParams.Secret, h.ExpirationTimeDiff, statsHandler)
+		if !tokenExpired {
+			// Token is still valid - cache hit with fresh token
+			statsHandler.Increment("token_usage", stats.Tags{
+				"workerId":    strconv.Itoa(refTokenParams.WorkerID),
+				"tokenStatus": "fresh",
+			})
 			return http.StatusOK, cachedSecret, nil
 		}
 		// Refresh token preparation
@@ -233,13 +277,33 @@ func (h *OAuthHandler) GetTokenInfo(refTokenParams *RefreshTokenParams, logTypeN
 			HasExpired:    true,
 			ExpiredSecret: refTokenParams.Secret,
 		}
+	} else {
+		// Cache miss
+		statsHandler.Increment("cache_miss", stats.Tags{
+			"workerId":       strconv.Itoa(refTokenParams.WorkerID),
+			"cacheOperation": "load",
+		})
+		statsHandler.SendTiming(cacheLoadStartTime, "cache_load_latency", stats.Tags{
+			"result":         "miss",
+			"cacheOperation": "load",
+		})
 	}
 	statusCode, refSecret, refErr := h.fetchAccountInfoFromCp(refTokenParams, refTokenBody, statsHandler, logTypeName)
 	// handling of refresh token response
 	if statusCode == http.StatusOK {
 		// fetching/refreshing through control plane was successful
+		statsHandler.Increment("refresh_success", stats.Tags{
+			"workerId": strconv.Itoa(refTokenParams.WorkerID),
+		})
 		return statusCode, refSecret, nil
 	}
+
+	// Track refresh failures
+	statsHandler.Increment("refresh_failure", stats.Tags{
+		"statusCode": strconv.Itoa(statusCode),
+		"errorType":  "cp_api_error",
+		"workerId":   strconv.Itoa(refTokenParams.WorkerID),
+	})
 	return statusCode, refSecret, refErr
 }
 
@@ -249,7 +313,8 @@ func (h *OAuthHandler) AuthStatusToggle(params *AuthStatusToggleParams) (statusC
 	action := fmt.Sprintf("auth_status_%v", params.StatPrefix)
 
 	authStatusToggleStats := &OAuthStats{
-		id:              destinationId,
+		destinationId:   destinationId,
+		accountId:       params.RudderAccountID,
 		workspaceID:     params.WorkspaceID,
 		rudderCategory:  "destination",
 		statName:        "",
@@ -277,9 +342,22 @@ func (h *OAuthHandler) AuthStatusToggle(params *AuthStatusToggleParams) (statusC
 		h.CacheMutex.Lock(params.RudderAccountID)
 		h.AuthStatusUpdateActiveMap[destinationId] = false
 		h.Logger.Debugn("[request] :: AuthStatusInactive request is inactive!")
+
+		// Track cache delete operation
+		cacheDeleteStartTime := time.Now()
+
 		// After trying to inactivate authStatus for destination, need to remove existing accessToken(from in-memory cache)
 		// This is being done to obtain new token after an update such as re-authorisation is done
 		h.Cache.Delete(params.RudderAccountID)
+
+		statsHandler.SendTiming(cacheDeleteStartTime, "cache_delete_latency", stats.Tags{
+			"cacheOperation": "delete",
+		})
+		statsHandler.Increment("cache_delete", stats.Tags{
+			"reason":         "auth_status_inactive",
+			"cacheOperation": "delete",
+		})
+
 		h.CacheMutex.Unlock(params.RudderAccountID)
 	}()
 	defer func() {
@@ -431,6 +509,12 @@ func (h *OAuthHandler) fetchAccountInfoFromCp(refTokenParams *RefreshTokenParams
 			logger.NewIntField("WorkerId", int64(refTokenParams.WorkerID)),
 			logger.NewStringField("Call Type", logTypeName))
 
+		// Track stale token usage
+		statsHandler.Increment("token_usage", stats.Tags{
+			"workerId":    strconv.Itoa(refTokenParams.WorkerID),
+			"tokenStatus": "stale",
+		})
+
 		return http.StatusInternalServerError, nil, errors.New("empty secret")
 	}
 
@@ -449,6 +533,12 @@ func (h *OAuthHandler) fetchAccountInfoFromCp(refTokenParams *RefreshTokenParams
 			// until we have new refresh token for the account
 			return http.StatusBadRequest, authResponse, fmt.Errorf("invalid grant")
 		}
+		// Track stale token usage
+		statsHandler.Increment("token_usage", stats.Tags{
+			"workerId":    strconv.Itoa(refTokenParams.WorkerID),
+			"tokenStatus": "stale",
+		})
+
 		return http.StatusInternalServerError, authResponse, fmt.Errorf("error occurred while fetching/refreshing account info from CP: %s", refErrMsg)
 	}
 
@@ -458,6 +548,12 @@ func (h *OAuthHandler) fetchAccountInfoFromCp(refTokenParams *RefreshTokenParams
 			"errorMessage":  errMsg.Error(),
 			"isCallToCpApi": "true",
 		})
+		// Track stale token usage
+		statsHandler.Increment("token_usage", stats.Tags{
+			"workerId":    strconv.Itoa(refTokenParams.WorkerID),
+			"tokenStatus": "stale",
+		})
+
 		return http.StatusInternalServerError, nil, errMsg
 	}
 	statsHandler.Increment("request", stats.Tags{
@@ -467,9 +563,23 @@ func (h *OAuthHandler) fetchAccountInfoFromCp(refTokenParams *RefreshTokenParams
 	log.Debugn("[request] :: (Write) Account Secret received")
 	// Store expirationDate information
 	accountSecret.ExpirationDate = gjson.Get(response, "secret.expirationDate").String()
+
+	// Track cache store operation
+	cacheStoreStartTime := time.Now()
+
 	h.Cache.Store(refTokenParams.AccountID, &AuthResponse{
 		Account: accountSecret,
 	})
+
+	statsHandler.SendTiming(cacheStoreStartTime, "cache_store_latency", stats.Tags{
+		"cacheOperation": "store",
+	})
+	statsHandler.Increment("cache_store", stats.Tags{
+		"tokenStatus":    "fresh",
+		"cacheOperation": "store",
+		"workerId":       strconv.Itoa(refTokenParams.WorkerID),
+	})
+
 	return http.StatusOK, &AuthResponse{
 		Account: accountSecret,
 	}, nil

@@ -15,7 +15,8 @@ const OAUTH_V2_STAT_PREFIX = "oauth_action"
 
 type OAuthStats struct {
 	stats           stats.Stats
-	id              string // destinationId -> for action == auth_status_inactive, accountId -> for action == refresh_token/fetch_token
+	accountId       string // destinationId -> for action == auth_status_inactive, accountId -> for action == refresh_token/fetch_token
+	destinationId   string
 	workspaceID     string
 	errorMessage    string
 	rudderCategory  string // destination
@@ -25,6 +26,13 @@ type OAuthStats struct {
 	destDefName     string
 	flowType        common.RudderFlow // delivery, delete
 	action          string            // refresh_token, fetch_token, auth_status_inactive
+
+	// New fields for comprehensive metrics
+	workerId        int    // worker ID to track worker behavior patterns
+	cacheOperation  string // cache operation type: hit, miss, store, delete
+	tokenStatus     string // token status: fresh, stale, expired, invalid
+	concurrentCount int    // number of concurrent operations
+	refreshReason   string // reason for refresh: expired, stale, missing, error
 }
 
 type OAuthStatsHandler struct {
@@ -33,8 +41,9 @@ type OAuthStatsHandler struct {
 }
 
 func GetDefaultTagsFromOAuthStats(oauthStats *OAuthStats) stats.Tags {
-	return stats.Tags{
-		"id":              oauthStats.id,
+	tags := stats.Tags{
+		"accountId":       oauthStats.accountId,
+		"destinationId":   oauthStats.destinationId,
 		"workspaceId":     oauthStats.workspaceID,
 		"rudderCategory":  "destination",
 		"isCallToCpApi":   strconv.FormatBool(oauthStats.isCallToCpApi),
@@ -44,6 +53,25 @@ func GetDefaultTagsFromOAuthStats(oauthStats *OAuthStats) stats.Tags {
 		"action":          oauthStats.action,
 		"oauthVersion":    "v2",
 	}
+
+	// Add new metric tags if they have values
+	if oauthStats.workerId > 0 {
+		tags["workerId"] = strconv.Itoa(oauthStats.workerId)
+	}
+	if oauthStats.cacheOperation != "" {
+		tags["cacheOperation"] = oauthStats.cacheOperation
+	}
+	if oauthStats.tokenStatus != "" {
+		tags["tokenStatus"] = oauthStats.tokenStatus
+	}
+	if oauthStats.concurrentCount > 0 {
+		tags["concurrentCount"] = strconv.Itoa(oauthStats.concurrentCount)
+	}
+	if oauthStats.refreshReason != "" {
+		tags["refreshReason"] = oauthStats.refreshReason
+	}
+
+	return tags
 }
 
 func NewStatsHandlerFromOAuthStats(oauthStats *OAuthStats) OAuthStatsHandler {
