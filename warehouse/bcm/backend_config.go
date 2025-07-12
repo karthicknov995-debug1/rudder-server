@@ -153,7 +153,9 @@ func (bcm *BackendConfigManager) processData(ctx context.Context, data map[strin
 			sourceIDsByWorkspace[workspaceID] = append(sourceIDsByWorkspace[workspaceID], source.ID)
 
 			for _, destination := range source.Destinations {
-				if _, ok := whutils.WarehouseDestinationMap[destination.DestinationDefinition.Name]; !ok {
+        // PseudoWarehouseDestinationMap is being used instead of WarehouseDestinations because
+				// SnowpipeStreaming validation requires the destination to be in this workspace config
+				if _, ok := whutils.PseudoWarehouseDestinationMap[destination.DestinationDefinition.Name]; !ok {
 					bcm.logger.Debugn("Not a warehouse destination, skipping",
 						logger.NewStringField(logfield.DestinationType, destination.DestinationDefinition.Name),
 					)
