@@ -22,6 +22,9 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/sts"
 	"github.com/iancoleman/strcase"
+	"github.com/samber/lo"
+	"github.com/tidwall/gjson"
+
 	"github.com/rudderlabs/rudder-go-kit/awsutil"
 	"github.com/rudderlabs/rudder-go-kit/awsutil_v2"
 	"github.com/rudderlabs/rudder-go-kit/config"
@@ -34,8 +37,6 @@ import (
 	"github.com/rudderlabs/rudder-server/utils/awsutils"
 	"github.com/rudderlabs/rudder-server/utils/misc"
 	"github.com/rudderlabs/rudder-server/warehouse/internal/model"
-	"github.com/samber/lo"
-	"github.com/tidwall/gjson"
 )
 
 const (
