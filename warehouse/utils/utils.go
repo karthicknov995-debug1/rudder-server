@@ -17,29 +17,25 @@ import (
 	"strings"
 	"time"
 
-	"github.com/samber/lo"
-
-	"github.com/rudderlabs/rudder-go-kit/jsonrs"
-
-	"github.com/rudderlabs/rudder-server/warehouse/internal/model"
-
 	"github.com/Azure/azure-storage-blob-go/azblob"
 	s3v2 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/aws/aws-sdk-go/service/sts"
 	"github.com/iancoleman/strcase"
-	"github.com/tidwall/gjson"
-
 	"github.com/rudderlabs/rudder-go-kit/awsutil"
 	"github.com/rudderlabs/rudder-go-kit/awsutil_v2"
 	"github.com/rudderlabs/rudder-go-kit/config"
 	"github.com/rudderlabs/rudder-go-kit/filemanager"
+	"github.com/rudderlabs/rudder-go-kit/jsonrs"
 	"github.com/rudderlabs/rudder-go-kit/logger"
 	"github.com/rudderlabs/rudder-go-kit/stats"
-
+	obskit "github.com/rudderlabs/rudder-observability-kit/go/labels"
 	backendconfig "github.com/rudderlabs/rudder-server/backend-config"
 	"github.com/rudderlabs/rudder-server/utils/awsutils"
 	"github.com/rudderlabs/rudder-server/utils/misc"
+	"github.com/rudderlabs/rudder-server/warehouse/internal/model"
+	"github.com/samber/lo"
+	"github.com/tidwall/gjson"
 )
 
 const (
@@ -810,7 +806,7 @@ func GetSSLKeyDirPath(destinationID string) (whSSLRootDir string) {
 	var err error
 	var directoryName string
 	if directoryName, err = misc.CreateTMPDIR(); err != nil {
-		pkgLogger.Errorf("Error creating SSL root TMP directory for destination %v", err)
+		pkgLogger.Errorn("Error creating SSL root TMP directory for destination", obskit.Error(err))
 		return
 	}
 	sslDirPath := fmt.Sprintf("%s/dest-ssls/%s", directoryName, destinationID)
