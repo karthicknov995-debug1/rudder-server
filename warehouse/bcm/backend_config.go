@@ -44,7 +44,7 @@ func New(
 	bcm := &BackendConfigManager{
 		conf:                 c,
 		db:                   db,
-		schema:               repo.NewWHSchemas(db, c),
+		schema:               repo.NewWHSchemas(db),
 		tenantManager:        tenantManager,
 		logger:               log,
 		stats:                stats,

@@ -35,7 +35,7 @@ var deprecatedColumnsRegex = regexp.MustCompile(
 
 type schemaRepo interface {
 	GetForNamespace(ctx context.Context, destID, namespace string) (model.WHSchema, error)
-	Insert(ctx context.Context, whSchema *model.WHSchema) error
+	Insert(ctx context.Context, whSchema *model.WHSchema) (int64, error)
 }
 
 type stagingFileRepo interface {
@@ -230,16 +230,14 @@ func (sh *schema) saveSchema(ctx context.Context, updatedSchema model.Schema) er
 	sh.stats.schemaSize.Observe(float64(len(updatedSchemaInBytes)))
 
 	expiresAt := sh.now().Add(sh.ttlInMinutes)
-	err = sh.schemaRepo.Insert(ctx,
-		&model.WHSchema{
-			SourceID:        sh.warehouse.Source.ID,
-			Namespace:       sh.warehouse.Namespace,
-			DestinationID:   sh.warehouse.Destination.ID,
-			DestinationType: sh.warehouse.Type,
-			Schema:          updatedSchema,
-			ExpiresAt:       expiresAt,
-		},
-	)
+	_, err = sh.schemaRepo.Insert(ctx, &model.WHSchema{
+		SourceID:        sh.warehouse.Source.ID,
+		Namespace:       sh.warehouse.Namespace,
+		DestinationID:   sh.warehouse.Destination.ID,
+		DestinationType: sh.warehouse.Type,
+		Schema:          updatedSchema,
+		ExpiresAt:       expiresAt,
+	})
 	if err != nil {
 		return fmt.Errorf("inserting schema: %w", err)
 	}
