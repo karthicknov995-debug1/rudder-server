@@ -538,7 +538,7 @@ func (w *worker) processDestinationJobs() {
 						truncatedMessage := misc.TruncateStr(string(destinationJob.Message), int(10*bytesize.KB))
 						w.logger.Errorn("transformer response unmarshal error",
 							logger.NewStringField("message", truncatedMessage),
-							logger.NewField("jobIDs", jobIDs),
+							logger.NewIntSliceField("jobIDs", jobIDs),
 						)
 						respStatusCodes, respBodys = w.prepareResponsesForJobs(&destinationJob, respStatusCode, respBody)
 					} else {
