@@ -1459,9 +1459,12 @@ func (proc *Handle) getTransformationMetrics(
 				eventsByMessageID)
 		}
 
-		proc.logger.Debugf(
-			"[Processor: getTransformationMetrics] Error [%d] for source %q and destination %q: %s",
-			failedEvent.StatusCode, commonMetaData.SourceID, commonMetaData.DestinationID, failedEvent.Error,
+		proc.logger.Debugn(
+			"[Processor: getTransformationMetrics] Error for source and destination",
+			logger.NewIntField("statusCode", int64(failedEvent.StatusCode)),
+			obskit.SourceID(commonMetaData.SourceID),
+			obskit.DestinationID(commonMetaData.DestinationID),
+			logger.NewStringField("error", failedEvent.Error),
 		)
 
 		id := misc.FastUUID()
@@ -3304,9 +3307,9 @@ func (proc *Handle) userTransformAndFilter(
 					proc.drainConfig.jobRunIDs.Load(),
 					event.Metadata.SourceJobRunID,
 				) {
-				proc.logger.Debugf(
-					"cancelled jobRunID: %s",
-					event.Metadata.SourceJobRunID,
+				proc.logger.Debugn(
+					"cancelled jobRunID",
+					logger.NewStringField("jobRunID", event.Metadata.SourceJobRunID),
 				)
 				return true, "cancelled jobRunId"
 			}
@@ -3419,7 +3422,7 @@ func (proc *Handle) destTransform(
 			destTransformationStat.transformTime.Since(s)
 			transformAt = "processor"
 
-			proc.logger.Debugf("Dest Transform output size %d", len(response.Events))
+			proc.logger.Debugn("Dest Transform output size", logger.NewIntField("outputSize", int64(len(response.Events))))
 			trace.Logf(ctx, "DestTransform", "output size %d", len(response.Events))
 
 			nonSuccessMetrics := proc.getNonSuccessfulMetrics(
@@ -3736,7 +3739,7 @@ func (proc *Handle) getJobsStage(ctx context.Context, partition string) jobsdb.J
 		defer proc.limiter.read.BeginWithPriority(partition, proc.getLimiterPriority(partition))()
 	}
 
-	proc.logger.Debugf("Processor DB Read size: %d", proc.config.maxEventsToProcess)
+	proc.logger.Debugn("Processor DB Read size", logger.NewIntField("maxEventsToProcess", int64(proc.config.maxEventsToProcess.Load())))
 
 	eventCount := proc.config.maxEventsToProcess.Load()
 	if !proc.config.enableEventCount.Load() {
@@ -3771,11 +3774,13 @@ func (proc *Handle) getJobsStage(ctx context.Context, partition string) jobsdb.J
 
 	// check if there is work to be done
 	if len(unprocessedList.Jobs) == 0 {
-		proc.logger.Debugf("Processor DB Read Complete. No GW Jobs to process.")
+		proc.logger.Debugn("Processor DB Read Complete. No GW Jobs to process.")
 		return unprocessedList
 	}
 
-	proc.logger.Debugf("Processor DB Read Complete. unprocessedList: %v total_events: %d", len(unprocessedList.Jobs), unprocessedList.EventsCount)
+	proc.logger.Debugn("Processor DB Read Complete",
+		logger.NewIntField("unprocessedJobs", int64(len(unprocessedList.Jobs))),
+		logger.NewIntField("totalEvents", int64(unprocessedList.EventsCount)))
 	proc.stats.statGatewayDBR(partition).Count(len(unprocessedList.Jobs))
 	proc.stats.statReadStageCount(partition).Count(len(unprocessedList.Jobs))
 
@@ -4001,7 +4006,8 @@ func (proc *Handle) countPendingEvents(ctx context.Context) error {
 			}
 			return g.Wait()
 		}, func(attempt int) {
-			proc.logger.Warnf("Timeout during GetPileUpCounts, attempt %d", attempt)
+			proc.logger.Warnn("Timeout during GetPileUpCounts",
+				logger.NewIntField("attempt", int64(attempt)))
 			stats.Default.NewTaggedStat("jobsdb_query_timeout", stats.CountType, stats.Tags{"attempt": strconv.Itoa(attempt), "module": "pileup"}).Increment()
 		})
 	if err != nil && ctx.Err() == nil { // ignore context cancellation
