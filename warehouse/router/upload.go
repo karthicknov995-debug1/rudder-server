@@ -19,6 +19,7 @@ import (
 	"github.com/rudderlabs/rudder-go-kit/filemanager"
 	"github.com/rudderlabs/rudder-go-kit/logger"
 	"github.com/rudderlabs/rudder-go-kit/stats"
+	obskit "github.com/rudderlabs/rudder-observability-kit/go/labels"
 
 	"github.com/rudderlabs/rudder-go-kit/jsonrs"
 
@@ -404,6 +405,16 @@ func (job *UploadJob) run() (err error) {
 		case model.ExportedData:
 			newStatus = nextUploadState.failed
 			if err = job.exportData(); err != nil {
+				outdated, checkErr := job.schemaHandle.IsSchemaOutdated(job.ctx)
+				if checkErr != nil {
+					job.logger.Errorn("Error checking if warehouse schema is outdated", obskit.Error(checkErr))
+					break
+				}
+				if outdated {
+					job.logger.Infon("Warehouse schema cache was outdated. Forcing job back to waiting to regenerate load files with fresh schema.")
+					newStatus = model.Waiting
+					break
+				}
 				break
 			}
 			if err = job.cleanupObjectStorageFiles(); err != nil {

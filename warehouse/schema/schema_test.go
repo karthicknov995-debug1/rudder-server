@@ -58,18 +58,20 @@ func (m *mockSchemaRepo) Insert(_ context.Context, schema *model.WHSchema) (int6
 
 type mockFetchSchemaRepo struct{}
 
+var mockFetchSchema = model.Schema{
+	"table1": {
+		"column1": "string",
+		"column2": "int",
+	},
+	"table2": {
+		"column11": "string",
+		"column12": "int",
+		"column13": "int",
+	},
+}
+
 func (m *mockFetchSchemaRepo) FetchSchema(ctx context.Context) (model.Schema, error) {
-	return model.Schema{
-		"table1": {
-			"column1": "string",
-			"column2": "int",
-		},
-		"table2": {
-			"column11": "string",
-			"column12": "int",
-			"column13": "int",
-		},
-	}, nil
+	return mockFetchSchema, nil
 }
 
 type mockStagingFileRepo struct {
@@ -1410,6 +1412,46 @@ func TestSchema(t *testing.T) {
 		require.False(t, sch1_new.IsSchemaEmpty(ctx))
 		require.Equal(t, initialSchema["table1"], sch1_new.GetTableSchema(ctx, "table1"))
 		require.Equal(t, table2Schema, sch1_new.GetTableSchema(ctx, "table2"))
+	})
+
+	t.Run("IsSchemaOutdated", func(t *testing.T) {
+		testsCases := []struct {
+			name            string
+			warehouseSchema map[string]model.WHSchema
+			output          bool
+		}{
+			{
+				name: "returns true for outdated schema",
+				warehouseSchema: map[string]model.WHSchema{
+					"dest_id_namespace": {
+						Schema: model.Schema{
+							"table1": {"column1": "string"},
+						},
+						ExpiresAt: timeutil.Now().Add(10 * time.Minute),
+					},
+				},
+				output: true,
+			},
+			{
+				name: "returns false for not outdated schema",
+				warehouseSchema: map[string]model.WHSchema{
+					"dest_id_namespace": {
+						Schema: mockFetchSchema,
+					},
+				},
+				output: false,
+			},
+		}
+		for _, tc := range testsCases {
+			t.Run(tc.name, func(t *testing.T) {
+				sh := newSchema(t, warehouse, &mockSchemaRepo{
+					schemaMap: tc.warehouseSchema,
+				})
+				outdated, err := sh.IsSchemaOutdated(ctx)
+				require.NoError(t, err)
+				require.Equal(t, tc.output, outdated)
+			})
+		}
 	})
 }
 
